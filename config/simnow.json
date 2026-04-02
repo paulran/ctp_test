@@ -1,0 +1,15 @@
+{
+    "log": {
+        "level": "DEBUG"
+    },
+    "trader": {
+        "frontAddress": "tcp://182.254.243.31:30001",
+        "brokerID": "9999",
+        "userID": "xxxxxx",
+        "userProductInfo": "simnow_client_test",
+        "authCode": "0000000000000000",
+        "appID": "simnow_client_test",
+        "password": "xxxxxx",
+        "investorID": "xxxxxx"
+    }
+}

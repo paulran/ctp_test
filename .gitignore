@@ -18,7 +18,7 @@
 *.pdb
 
 # Compiled Dynamic libraries
-*.so
+# *.so
 *.dylib
 *.dll
 
@@ -39,3 +39,5 @@
 
 # debug information files
 *.dwo
+
+3rdparty/json
