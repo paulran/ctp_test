@@ -1,6 +1,7 @@
 #include "common.h"
 #include "logger.h"
 #include "traderspi.h"
+#include "timerthread.h"
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -68,19 +69,35 @@ int main(int argc, char *argv[])
     auto appID = config["trader"]["appID"].get<string>();
     auto password = config["trader"]["password"].get<string>();
     auto investorID = config["trader"]["investorID"].get<string>();
-    LogInfo("Configure frontAddress: {}, brokerID: {}, userID: {}, userProductInfo: {}, appID: {}, investorID: {}",
-            frontAddress, brokerID, userID, userProductInfo, appID, investorID);
+    auto bIsProductionMode = config["trader"]["bIsProductionMode"].get<bool>();
+    auto maxInsertOrderCountPerSecond = config["trader"]["maxInsertOrderCountPerSecond"].get<int>();
+    auto maxCancelOrderCountPerSecond = config["trader"]["maxCancelOrderCountPerSecond"].get<int>();
+    LogInfo("Configure frontAddress: {}, brokerID: {}, userID: {}, userProductInfo: {}, appID: {}, investorID: {}, "
+            "bIsProductionMode: {}, maxInsertOrderCountPerSecond: {}, maxCancelOrderCountPerSecond: {}",
+            frontAddress, brokerID, userID, userProductInfo, appID, investorID,
+            bIsProductionMode, maxInsertOrderCountPerSecond, maxCancelOrderCountPerSecond);
 
-    CThostFtdcTraderApi *api = CThostFtdcTraderApi::CreateFtdcTraderApi();
-    CTraderSpi traderSpi(api, frontAddress, brokerID, userID, userProductInfo, authCode, appID, password, investorID);
+    CThostFtdcTraderApi *api = CThostFtdcTraderApi::CreateFtdcTraderApi("", bIsProductionMode);
+    auto apiVersion = api->GetApiVersion();
+    LogInfo("CTP Trader API Version: {}", apiVersion);
+    // sleep for a while to let the API thread start and print its version info
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    CTraderSpi traderSpi(api, frontAddress, brokerID, userID, userProductInfo, authCode, appID, password, investorID,
+                         maxInsertOrderCountPerSecond, maxCancelOrderCountPerSecond);
+    traderSpi.Init();
     api->RegisterSpi(&traderSpi);
     char pszTdFrontAddress[64];
     strncpy(pszTdFrontAddress, frontAddress.c_str(), 63);
     api->RegisterFront(pszTdFrontAddress);
-    api->SubscribePrivateTopic(THOST_TERT_QUICK);
+    api->SubscribePrivateTopic(THOST_TERT_RESTART); // 重启模式;
     api->SubscribePublicTopic(THOST_TERT_QUICK);
     api->Init();
+    // 启动timerthread
+    CTimerThread timerThread(api, &traderSpi);
+    timerThread.Start();
     int ret = api->Join();
     LogWarn("Api thread exited with code: {}, main thread will exit too.", ret);
+    timerThread.Stop();
+    timerThread.Join();
     return 0;
 }

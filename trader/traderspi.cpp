@@ -1,13 +1,25 @@
+#include "common.h"
 #include "logger.h"
 #include "traderspi.h"
 
 CTraderSpi::CTraderSpi(CThostFtdcTraderApi *api, const string &frontAddress, const string &brokerID, const string &userID,
                        const string &userProductInfo, const string &authCode, const string &appID,
-                       const string &password, const string &investorID)
+                       const string &password, const string &investorID,
+                       int maxInsertOrderCountPerSecond, int maxCancelOrderCountPerSecond)
     : api_(api), frontAddress_(frontAddress), brokerID_(brokerID), userID_(userID),
       userProductInfo_(userProductInfo), authCode_(authCode), appID_(appID),
-      password_(password), investorID_(investorID)
+      password_(password), investorID_(investorID),
+      orderInsertCountStatis_(maxInsertOrderCountPerSecond),
+      orderCancelCountStatis_(maxCancelOrderCountPerSecond)
 {
+}
+
+void CTraderSpi::Init()
+{
+    dataSaved_.load();
+    orderRefId_ = dataSaved_.getOrderRef();
+    orderActionRef_ = dataSaved_.getOrderActionRef();
+    LogInfo("TraderSpi initialized. Last orderRef: {}, last orderActionRef: {}", orderRefId_, orderActionRef_);
 }
 
 /// 当客户端与交易后台建立起通信连接时（还未登录前），该方法被调用。
@@ -25,6 +37,7 @@ void CTraderSpi::OnFrontConnected()
 void CTraderSpi::OnFrontDisconnected(int nReason)
 {
     LogWarn("Disconnected from trading front, reason: {}", nReason);
+    loggedIn_.store(false, std::memory_order_release);
 }
 
 /// 心跳超时警告。当长时间未收到报文时，该方法被调用。
@@ -57,10 +70,12 @@ void CTraderSpi::OnRspUserLogin(CThostFtdcRspUserLoginField *pRspUserLogin, CTho
     if (pRspInfo && pRspInfo->ErrorID != 0)
     {
         LogError("Login failed, error code: {}, error message: {}", pRspInfo->ErrorID, pRspInfo->ErrorMsg);
+        loggedIn_.store(false, std::memory_order_release);
     }
     else
     {
         LogInfo("Login successful. Trading day: {}, Login time: {}", pRspUserLogin->TradingDay, pRspUserLogin->LoginTime);
+        loggedIn_.store(true, std::memory_order_release);
     }
 }
 
@@ -74,6 +89,7 @@ void CTraderSpi::OnRspUserLogout(CThostFtdcUserLogoutField *pUserLogout, CThostF
     else
     {
         LogInfo("Logout successful.");
+        loggedIn_.store(false, std::memory_order_release);
     }
 }
 
@@ -373,8 +389,23 @@ void CTraderSpi::OnRspQryOrder(CThostFtdcOrderField *pOrder, CThostFtdcRspInfoFi
     }
     else
     {
-        LogInfo("Query order successful. Order ref: {}, instrument: {}, order status: {}",
-                pOrder->OrderRef, pOrder->InstrumentID, pOrder->OrderStatus);
+        LogInfo("Query order successful. Order ref: {}, OrderSysID: {}, instrument: {}, order status: {}",
+                pOrder->OrderRef, pOrder->OrderSysID, pOrder->InstrumentID, pOrder->OrderStatus);
+        // 保存订单状态到map中
+        orderStatusMap_[pOrder->OrderRef] = pOrder->OrderStatus;
+        if (bIsLast)
+        {
+            // 统计被撤销的订单数量
+            int cancelCount = 0;
+            for (const auto &entry : orderStatusMap_)
+            {
+                if (entry.second == THOST_FTDC_OST_Canceled)
+                {
+                    cancelCount++;
+                }
+            }
+            LogInfo("Total orders: {}, Canceled orders: {}", orderStatusMap_.size(), cancelCount);
+        }
     }
 }
 
@@ -513,8 +544,15 @@ void CTraderSpi::OnRspQryInstrument(CThostFtdcInstrumentField *pInstrument, CTho
     }
     else
     {
-        LogInfo("Query instrument successful. Instrument ID: {}, name: {}, product ID: {}",
-                pInstrument->InstrumentID, pInstrument->InstrumentName, pInstrument->ProductID);
+        LogInfo("Query instrument successful. ExchangeID: {}, Instrument ID: {}, name: {}, product ID: {}",
+                pInstrument->ExchangeID, pInstrument->InstrumentID, pInstrument->InstrumentName, pInstrument->ProductID);
+
+        instrumentMap_[pInstrument->ExchangeID][pInstrument->InstrumentID] = *pInstrument;
+        if (bIsLast)
+        {
+            LogInfo("Total instruments queried: {}", instrumentMap_[pInstrument->ExchangeID].size());
+            isInitialized_.store(true, std::memory_order_release);
+        }
     }
 }
 
@@ -1014,6 +1052,18 @@ void CTraderSpi::OnRtnOrder(CThostFtdcOrderField *pOrder)
 {
     LogInfo("Order notification received. Instrument ID: {}, order ref: {}, direction: {}, volume: {}, order status: {}",
             pOrder->InstrumentID, pOrder->OrderRef, pOrder->Direction, pOrder->VolumeTotalOriginal, pOrder->OrderStatus);
+    // 保存订单状态到map中
+    orderStatusMap_[pOrder->OrderRef] = pOrder->OrderStatus;
+    // 统计被撤销的订单数量
+    int cancelCount = 0;
+    for (const auto &entry : orderStatusMap_)
+    {
+        if (entry.second == THOST_FTDC_OST_Canceled)
+        {
+            cancelCount++;
+        }
+    }
+    LogInfo("Total orders: {}, Canceled orders: {}", orderStatusMap_.size(), cancelCount);
 }
 
 /// 成交通知
@@ -1519,8 +1569,7 @@ void CTraderSpi::OnRspQryInvestorProdRULEMargin(CThostFtdcInvestorProdRULEMargin
 /* private */
 int CTraderSpi::ReqAuthenticate()
 {
-    CThostFtdcReqAuthenticateField req;
-    memset(&req, 0, sizeof(req));
+    CThostFtdcReqAuthenticateField req = {0};
     strncpy(req.BrokerID, brokerID_.c_str(), sizeof(req.BrokerID) - 1);
     strncpy(req.UserID, userID_.c_str(), sizeof(req.UserID) - 1);
     strncpy(req.UserProductInfo, userProductInfo_.c_str(), sizeof(req.UserProductInfo) - 1);
@@ -1531,12 +1580,29 @@ int CTraderSpi::ReqAuthenticate()
 
 int CTraderSpi::ReqUserLogin()
 {
-    CThostFtdcReqUserLoginField req;
-    memset(&req, 0, sizeof(req));
+    CThostFtdcReqUserLoginField req = {0};
     strncpy(req.BrokerID, brokerID_.c_str(), sizeof(req.BrokerID) - 1);
     strncpy(req.UserID, userID_.c_str(), sizeof(req.UserID) - 1);
     strncpy(req.Password, password_.c_str(), sizeof(req.Password) - 1);
     return api_->ReqUserLogin(&req, ++requestId_);
+}
+
+bool CTraderSpi::isLoggedIn() const
+{
+    return loggedIn_.load(std::memory_order_acquire);
+}
+
+bool CTraderSpi::isInitialized() const
+{
+    return isInitialized_.load(std::memory_order_acquire);
+}
+
+int CTraderSpi::ReqQryInstrument(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID)
+{
+    CThostFtdcQryInstrumentField qryInstrumentField = {0};
+    memcpy(qryInstrumentField.ExchangeID, exchangeID, sizeof(qryInstrumentField.ExchangeID));
+    memcpy(qryInstrumentField.InstrumentID, instrumentID, sizeof(qryInstrumentField.InstrumentID));
+    return api_->ReqQryInstrument(&qryInstrumentField, ++requestId_);
 }
 
 int CTraderSpi::ReqQryInvestorPosition()
@@ -1546,32 +1612,131 @@ int CTraderSpi::ReqQryInvestorPosition()
     // 请求确认结算单及: ReqSettlementInfoConfirm
     // 查询结算单确认的日期: ReqQrySettlementInfoConfirm
     // 查询持仓（汇总）: ReqQryInvestorPosition
-    CThostFtdcQryInvestorPositionField qryInvestorPositionField;
-    memset(&qryInvestorPositionField, 0, sizeof(qryInvestorPositionField));
+    CThostFtdcQryInvestorPositionField qryInvestorPositionField = {0};
     return api_->ReqQryInvestorPosition(&qryInvestorPositionField, ++requestId_);
 }
 
-int CTraderSpi::ReqOrderInsert()
+int CTraderSpi::ReqQryOrder()
+{
+    // 请求查询报单
+    CThostFtdcQryOrderField qryOrderField = {0};
+    return api_->ReqQryOrder(&qryOrderField, ++requestId_);
+}
+
+int CTraderSpi::ReqOrderInsert(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID,
+                               TThostFtdcDirectionType direction, TThostFtdcPriceType price, TThostFtdcVolumeType volume,
+                               TThostFtdcOffsetFlagType offsetFlag, TThostFtdcOrderRefType &orderRef)
 {
     // 请求报单
-    CThostFtdcInputOrderField inputOrderField;
-    memset(&inputOrderField, 0, sizeof(inputOrderField));
+    if (!orderInsertCountStatis_.updateAndCheck())
+    {
+        LogWarn("Order insert count has reached the threshold, refusing to send order insert request to avoid potential issues.");
+        return -3; // 表示每秒发送请求数超过许可数。
+    }
+
+    // 检查exchangeID和instrumentID是否有效
+    auto exchangeIt = instrumentMap_.find(exchangeID);
+    if (exchangeIt == instrumentMap_.end())
+    {
+        LogError("Invalid exchange ID: {}. ", exchangeID);
+        return -4; // 表示无效的交易所代码。
+    }
+    auto instrumentIt = exchangeIt->second.find(instrumentID);
+    if (instrumentIt == exchangeIt->second.end())
+    {
+        LogError("Invalid instrument ID: {}. ", instrumentID);
+        return -4; // 表示无效的合约代码。
+    }
+    // 当前是否交易
+    if (!instrumentIt->second.IsTrading)
+    {
+        LogWarn("Instrument {} is not currently trading. ", instrumentID);
+        return -5; // 表示合约当前不可交易。
+    }
+    // 检查价格是否有效：和最小变动价位 PriceTick 对齐
+    TThostFtdcPriceType priceTick = instrumentIt->second.PriceTick;
+    price = std::round(price / priceTick) * priceTick; // 将价格调整为最接近的合法价格
+    if (price <= 0)
+    {
+        LogError("Invalid price: {}. Price must be greater than 0 and aligned with price tick: {}. ", price, priceTick);
+        return -6; // 表示价格无效。
+    }
+    // 检查数量是否有效（限价单）：和合约数量乘数 VolumeMultiple 对齐
+    TThostFtdcVolumeMultipleType VolumeMultiple = instrumentIt->second.VolumeMultiple;
+    volume = std::round(volume / VolumeMultiple) * VolumeMultiple; // 将数量调整为最接近的合法数量
+    if (volume < instrumentIt->second.MinLimitOrderVolume || volume > instrumentIt->second.MaxLimitOrderVolume)
+    {
+        LogError("Invalid volume: {}. Volume must be between {} and {} for limit orders. ", volume, instrumentIt->second.MinLimitOrderVolume, instrumentIt->second.MaxLimitOrderVolume);
+        return -7; // 表示数量无效。
+    }
+
+    CThostFtdcInputOrderField inputOrderField = {0};
     strncpy(inputOrderField.BrokerID, brokerID_.c_str(), sizeof(inputOrderField.BrokerID) - 1);
     strncpy(inputOrderField.InvestorID, investorID_.c_str(), sizeof(inputOrderField.InvestorID) - 1);
-    strncpy(inputOrderField.ExchangeID, "SHFE", sizeof(inputOrderField.ExchangeID) - 1);
-    strncpy(inputOrderField.InstrumentID, "ag1801", sizeof(inputOrderField.InstrumentID) - 1);
+    memcpy(inputOrderField.ExchangeID, exchangeID, sizeof(inputOrderField.ExchangeID));
+    memcpy(inputOrderField.InstrumentID, instrumentID, sizeof(inputOrderField.InstrumentID));
+    snprintf(orderRef, sizeof(orderRef), "%d", ++orderRefId_); // 生成递增的报单引用
+    strncpy(inputOrderField.OrderRef, orderRef, sizeof(inputOrderField.OrderRef) - 1);
     inputOrderField.OrderPriceType = THOST_FTDC_OPT_LimitPrice;   // 限价
-    inputOrderField.Direction = THOST_FTDC_D_Buy;                 // 买
-    inputOrderField.CombOffsetFlag[0] = THOST_FTDC_OF_Open;       // 开
+    inputOrderField.Direction = direction;                        // 买 - THOST_FTDC_D_Buy
+    inputOrderField.CombOffsetFlag[0] = offsetFlag;               // 开
     inputOrderField.CombHedgeFlag[0] = THOST_FTDC_HF_Speculation; // 投机
-    inputOrderField.LimitPrice = 100;
-    inputOrderField.VolumeTotalOriginal = 1;            // 数量
-    inputOrderField.TimeCondition = THOST_FTDC_TC_GFD;  // 当日有效
-    inputOrderField.VolumeCondition = THOST_FTDC_VC_AV; // 任意数量
+    inputOrderField.LimitPrice = price;                           // 价格
+    inputOrderField.VolumeTotalOriginal = volume;                 // 数量
+    inputOrderField.TimeCondition = THOST_FTDC_TC_GFD;            // 当日有效
+    inputOrderField.VolumeCondition = THOST_FTDC_VC_AV;           // 任意数量
     inputOrderField.MinVolume = 1;
     inputOrderField.ContingentCondition = THOST_FTDC_CC_Immediately;
     inputOrderField.StopPrice = 0;
     inputOrderField.ForceCloseReason = THOST_FTDC_FCC_NotForceClose;
     inputOrderField.IsAutoSuspend = 0;
+    LogInfo("Inserting order. Order ref: {}, Instrument ID: {}, direction: {}, volume: {}, price: {}",
+            inputOrderField.OrderRef, inputOrderField.InstrumentID, inputOrderField.Direction, inputOrderField.VolumeTotalOriginal, inputOrderField.LimitPrice);
+    LogInfo("Total order insert count: {}", orderRefId_);
+    orderInsertCountStatis_.increase();     // 统计报单插入次数
+    dataSaved_.updateOrderRef(orderRefId_); // 更新已保存数据的报单引用
+    dataSaved_.save();
     return api_->ReqOrderInsert(&inputOrderField, ++requestId_);
+}
+
+int CTraderSpi::ReqOrderAction(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID,
+                               const char *orderRef, TThostFtdcOrderActionRefType &orderActionRef)
+{
+    // 请求报单操作
+    if (!orderCancelCountStatis_.updateAndCheck())
+    {
+        LogWarn("Order action count has reached the threshold, refusing to send order action request to avoid potential issues.");
+        return -3; // 表示每秒发送请求数超过许可数。
+    }
+
+    // 检查exchangeID和instrumentID是否有效
+    auto exchangeIt = instrumentMap_.find(exchangeID);
+    if (exchangeIt == instrumentMap_.end())
+    {
+        LogError("Invalid exchange ID: {}. ", exchangeID);
+        return -4; // 表示无效的交易所代码。
+    }
+    auto instrumentIt = exchangeIt->second.find(instrumentID);
+    if (instrumentIt == exchangeIt->second.end())
+    {
+        LogError("Invalid instrument ID: {}. ", instrumentID);
+        return -4; // 表示无效的合约代码。
+    }
+
+    CThostFtdcInputOrderActionField inputOrderActionField = {0};
+    strncpy(inputOrderActionField.BrokerID, brokerID_.c_str(), sizeof(inputOrderActionField.BrokerID) - 1);
+    strncpy(inputOrderActionField.InvestorID, investorID_.c_str(), sizeof(inputOrderActionField.InvestorID) - 1);
+    memcpy(inputOrderActionField.ExchangeID, exchangeID, sizeof(inputOrderActionField.ExchangeID));
+    memcpy(inputOrderActionField.InstrumentID, instrumentID, sizeof(inputOrderActionField.InstrumentID));
+    strncpy(inputOrderActionField.OrderRef, orderRef, sizeof(inputOrderActionField.OrderRef) - 1);
+    orderActionRef = ++orderActionRef_;                      // 生成递增的报单操作引用
+    inputOrderActionField.OrderActionRef = orderActionRef;   // 报单操作引用，必填，递增
+    inputOrderActionField.ActionFlag = THOST_FTDC_AF_Delete; // 删除
+    LogInfo("Sending order action request. Order ref: {}, order action ref: {}, Instrument ID: {}, action flag: {}",
+            inputOrderActionField.OrderRef, inputOrderActionField.OrderActionRef, inputOrderActionField.InstrumentID, inputOrderActionField.ActionFlag);
+    LogInfo("Total order action count: {}", orderActionRef);
+    orderCancelCountStatis_.increase(); // 统计报单撤单次数
+    dataSaved_.updateOrderActionRef(orderActionRef);
+    dataSaved_.save();
+    return api_->ReqOrderAction(&inputOrderActionField, ++requestId_);
 }

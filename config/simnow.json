@@ -10,6 +10,9 @@
         "authCode": "0000000000000000",
         "appID": "simnow_client_test",
         "password": "xxxxxx",
-        "investorID": "xxxxxx"
+        "investorID": "xxxxxx",
+        "bIsProductionMode": true,
+        "maxInsertOrderCountPerSecond": 10,
+        "maxCancelOrderCountPerSecond": 10
     }
 }

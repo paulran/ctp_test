@@ -19,7 +19,15 @@ void BaseLog::init(const string &level)
         logLevel = spdlog::level::trace;
     }
 
-    logPtr = spdlog::stdout_color_mt("console");
+    // logPtr = spdlog::stdout_color_mt("console");
+    // 创建滚动文件日志
+    logPtr = spdlog::rotating_logger_mt(
+        "trader",
+        "../logs/trader.log",
+        1024 * 1024 * 5, // 单个文件最大大小(字节)，5MB
+        10               // 备份文件数量，超过这个数量会删除最旧的文件
+    );
+
     logPtr->set_level(logLevel);
 
     // See doc: https://github.com/gabime/spdlog/wiki/3.-Custom-formatting
