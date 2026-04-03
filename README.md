@@ -1,6 +1,6 @@
 # ctp_test
 CTP test
-* 使用CTP 6.7.2 api。
+* 使用CTP api v6.7.13_20260225 14:16:30.12079。
 
 ## 编译
 ```bash
