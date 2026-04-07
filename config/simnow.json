@@ -3,7 +3,7 @@
         "level": "DEBUG"
     },
     "trader": {
-        "frontAddress": "tcp://182.254.243.31:30001",
+        "frontAddress": "tcp://182.254.243.31:40001",
         "brokerID": "9999",
         "userID": "xxxxxx",
         "userProductInfo": "simnow_client_test",
@@ -13,6 +13,10 @@
         "investorID": "xxxxxx",
         "bIsProductionMode": true,
         "maxInsertOrderCountPerSecond": 10,
-        "maxCancelOrderCountPerSecond": 10
+        "maxCancelOrderCountPerSecond": 10,
+        "exchangeID": "DCE",
+        "instrumentID": "a2605",
+        "volume": 3,
+        "instrumentsFile": "../config/instruments.json"
     }
 }

@@ -1,5 +1,6 @@
 #include "common.h"
 #include "logger.h"
+#include "instrumentsloader.h"
 #include "traderspi.h"
 
 CTraderSpi::CTraderSpi(CThostFtdcTraderApi *api, const string &frontAddress, const string &brokerID, const string &userID,
@@ -387,6 +388,10 @@ void CTraderSpi::OnRspQryOrder(CThostFtdcOrderField *pOrder, CThostFtdcRspInfoFi
     {
         LogError("Query order failed, error code: {}, error message: {}", pRspInfo->ErrorID, pRspInfo->ErrorMsg);
     }
+    else if (!pOrder)
+    {
+        LogWarn("Query order response received with null order pointer.");
+    }
     else
     {
         LogInfo("Query order successful. Order ref: {}, OrderSysID: {}, instrument: {}, order status: {}",
@@ -546,12 +551,12 @@ void CTraderSpi::OnRspQryInstrument(CThostFtdcInstrumentField *pInstrument, CTho
     {
         LogInfo("Query instrument successful. ExchangeID: {}, Instrument ID: {}, name: {}, product ID: {}",
                 pInstrument->ExchangeID, pInstrument->InstrumentID, pInstrument->InstrumentName, pInstrument->ProductID);
+        CInstrumentsLoader::Instance().AddInstrument(pInstrument);
 
-        instrumentMap_[pInstrument->ExchangeID][pInstrument->InstrumentID] = *pInstrument;
         if (bIsLast)
         {
-            LogInfo("Total instruments queried: {}", instrumentMap_[pInstrument->ExchangeID].size());
             isInitialized_.store(true, std::memory_order_release);
+            CInstrumentsLoader::Instance().Save();
         }
     }
 }
@@ -1050,8 +1055,8 @@ void CTraderSpi::OnRspError(CThostFtdcRspInfoField *pRspInfo, int nRequestID, bo
 /// 报单通知
 void CTraderSpi::OnRtnOrder(CThostFtdcOrderField *pOrder)
 {
-    LogInfo("Order notification received. Instrument ID: {}, order ref: {}, direction: {}, volume: {}, order status: {}",
-            pOrder->InstrumentID, pOrder->OrderRef, pOrder->Direction, pOrder->VolumeTotalOriginal, pOrder->OrderStatus);
+    LogInfo("Order notification received. Instrument ID: {}, order ref: {}, direction: {}, volume: {}, order status: {}, status msg: {}",
+            pOrder->InstrumentID, pOrder->OrderRef, pOrder->Direction, pOrder->VolumeTotalOriginal, pOrder->OrderStatus, pOrder->StatusMsg);
     // 保存订单状态到map中
     orderStatusMap_[pOrder->OrderRef] = pOrder->OrderStatus;
     // 统计被撤销的订单数量
@@ -1635,38 +1640,36 @@ int CTraderSpi::ReqOrderInsert(TThostFtdcExchangeIDType exchangeID, TThostFtdcIn
     }
 
     // 检查exchangeID和instrumentID是否有效
-    auto exchangeIt = instrumentMap_.find(exchangeID);
-    if (exchangeIt == instrumentMap_.end())
+    auto pInstrument = CInstrumentsLoader::Instance().GetInstrument(exchangeID, instrumentID);
+    if (!pInstrument)
     {
-        LogError("Invalid exchange ID: {}. ", exchangeID);
-        return -4; // 表示无效的交易所代码。
-    }
-    auto instrumentIt = exchangeIt->second.find(instrumentID);
-    if (instrumentIt == exchangeIt->second.end())
-    {
-        LogError("Invalid instrument ID: {}. ", instrumentID);
+        LogError("Invalid instrument: {} {}", exchangeID, instrumentID);
         return -4; // 表示无效的合约代码。
     }
     // 当前是否交易
-    if (!instrumentIt->second.IsTrading)
+    if (!pInstrument->IsTrading)
     {
         LogWarn("Instrument {} is not currently trading. ", instrumentID);
         return -5; // 表示合约当前不可交易。
     }
     // 检查价格是否有效：和最小变动价位 PriceTick 对齐
-    TThostFtdcPriceType priceTick = instrumentIt->second.PriceTick;
+    TThostFtdcPriceType priceTick = pInstrument->PriceTick;
     price = std::round(price / priceTick) * priceTick; // 将价格调整为最接近的合法价格
+    LogDebug("Adjusted price to align with price tick. Adjusted price: {}, price tick: {}", price, priceTick);
     if (price <= 0)
     {
         LogError("Invalid price: {}. Price must be greater than 0 and aligned with price tick: {}. ", price, priceTick);
         return -6; // 表示价格无效。
     }
     // 检查数量是否有效（限价单）：和合约数量乘数 VolumeMultiple 对齐
-    TThostFtdcVolumeMultipleType VolumeMultiple = instrumentIt->second.VolumeMultiple;
-    volume = std::round(volume / VolumeMultiple) * VolumeMultiple; // 将数量调整为最接近的合法数量
-    if (volume < instrumentIt->second.MinLimitOrderVolume || volume > instrumentIt->second.MaxLimitOrderVolume)
+    TThostFtdcVolumeMultipleType VolumeMultiple = pInstrument->VolumeMultiple;
+    // volume是手数，不需要对齐
+    // volume = std::round(volume / VolumeMultiple) * VolumeMultiple; // 将数量调整为最接近的合法数量
+    LogDebug("Adjusted volume to align with volume multiple. Adjusted volume: {}, volume multiple: {}",
+             volume, VolumeMultiple);
+    if (volume < pInstrument->MinLimitOrderVolume || volume > pInstrument->MaxLimitOrderVolume)
     {
-        LogError("Invalid volume: {}. Volume must be between {} and {} for limit orders. ", volume, instrumentIt->second.MinLimitOrderVolume, instrumentIt->second.MaxLimitOrderVolume);
+        LogError("Invalid volume: {}. Volume must be between {} and {} for limit orders. ", volume, pInstrument->MinLimitOrderVolume, pInstrument->MaxLimitOrderVolume);
         return -7; // 表示数量无效。
     }
 
@@ -1710,16 +1713,10 @@ int CTraderSpi::ReqOrderAction(TThostFtdcExchangeIDType exchangeID, TThostFtdcIn
     }
 
     // 检查exchangeID和instrumentID是否有效
-    auto exchangeIt = instrumentMap_.find(exchangeID);
-    if (exchangeIt == instrumentMap_.end())
+    auto pInstrument = CInstrumentsLoader::Instance().GetInstrument(exchangeID, instrumentID);
+    if (!pInstrument)
     {
-        LogError("Invalid exchange ID: {}. ", exchangeID);
-        return -4; // 表示无效的交易所代码。
-    }
-    auto instrumentIt = exchangeIt->second.find(instrumentID);
-    if (instrumentIt == exchangeIt->second.end())
-    {
-        LogError("Invalid instrument ID: {}. ", instrumentID);
+        LogError("Invalid instrument: {} {}", exchangeID, instrumentID);
         return -4; // 表示无效的合约代码。
     }
 

@@ -1,5 +1,6 @@
 #include "common.h"
 #include "logger.h"
+#include "instrumentsloader.h"
 #include "traderspi.h"
 #include "timerthread.h"
 #include <cstring>
@@ -77,6 +78,12 @@ int main(int argc, char *argv[])
             frontAddress, brokerID, userID, userProductInfo, appID, investorID,
             bIsProductionMode, maxInsertOrderCountPerSecond, maxCancelOrderCountPerSecond);
 
+    if (CInstrumentsLoader::Instance().Load(config["trader"]["instrumentsFile"].get<string>()))
+    {
+        LogError("Fail to load instruments info from file: {}", config["trader"]["instrumentsFile"].get<string>());
+        return 2;
+    }
+
     CThostFtdcTraderApi *api = CThostFtdcTraderApi::CreateFtdcTraderApi("", bIsProductionMode);
     auto apiVersion = api->GetApiVersion();
     LogInfo("CTP Trader API Version: {}", apiVersion);
@@ -89,11 +96,15 @@ int main(int argc, char *argv[])
     char pszTdFrontAddress[64];
     strncpy(pszTdFrontAddress, frontAddress.c_str(), 63);
     api->RegisterFront(pszTdFrontAddress);
-    api->SubscribePrivateTopic(THOST_TERT_RESTART); // 重启模式;
-    api->SubscribePublicTopic(THOST_TERT_QUICK);
+    api->SubscribePrivateTopic(THOST_TERT_RESUME); // 从上次收到的续传
+    api->SubscribePublicTopic(THOST_TERT_QUICK); // 只传送登录后公共流的内容
     api->Init();
     // 启动timerthread
-    CTimerThread timerThread(api, &traderSpi);
+    auto exchangeID = config["trader"]["exchangeID"].get<string>();
+    auto instrumentID = config["trader"]["instrumentID"].get<string>();
+    auto volume = config["trader"]["volume"].get<int>();
+    LogInfo("Configure exchangeID: {}, instrumentID: {}, volume: {}", exchangeID, instrumentID, volume);
+    CTimerThread timerThread(api, &traderSpi, exchangeID, instrumentID, volume);
     timerThread.Start();
     int ret = api->Join();
     LogWarn("Api thread exited with code: {}, main thread will exit too.", ret);

@@ -2,8 +2,9 @@
 #include "timerthread.h"
 #include "logger.h"
 
-CTimerThread::CTimerThread(CThostFtdcTraderApi *tapi, CTraderSpi *spi)
-    : tapi_(tapi), spi_(spi)
+CTimerThread::CTimerThread(CThostFtdcTraderApi *tapi, CTraderSpi *spi, const string &exchangeID,
+                           const string &instrumentID, int volume)
+    : tapi_(tapi), spi_(spi), exchangeID_(exchangeID), instrumentID_(instrumentID), volume_(volume)
 {
 }
 
@@ -35,18 +36,21 @@ void CTimerThread::Join()
 void CTimerThread::Run()
 {
     // TODO: 配置这些参数，或者从外部传入
-    TThostFtdcExchangeIDType exchangeID;
-    strncpy(exchangeID, "DCE", sizeof(exchangeID) - 1); // 示例交易所代码，实际使用时应根据需要设置
-    TThostFtdcInstrumentIDType instrumentID;
-    strncpy(instrumentID, "a2605", sizeof(instrumentID) - 1); // 示例合约代码，实际使用时应根据需要设置
+    TThostFtdcExchangeIDType exchangeID = {0};
+    // strncpy(exchangeID, "DCE", sizeof(exchangeID) - 1); // 示例交易所代码，实际使用时应根据需要设置
+    strncpy(exchangeID, exchangeID_.c_str(), sizeof(exchangeID) - 1);
+    TThostFtdcInstrumentIDType instrumentID = {0};
+    // strncpy(instrumentID, "a2605", sizeof(instrumentID) - 1); // 示例合约代码，实际使用时应根据需要设置
+    strncpy(instrumentID, instrumentID_.c_str(), sizeof(instrumentID) - 1);
     TThostFtdcExchangeIDType emptyExchangeID = {0};
     TThostFtdcInstrumentIDType emptyInstrumentID = {0};
-    TThostFtdcVolumeType volume = 3;      // 示例数量，实际使用时应根据需要设置
-    TThostFtdcPriceType buyPrice = 5091;  // 示例买入价格，实际使用时应根据需要设置
-    TThostFtdcPriceType sellPrice = 5118; // 示例卖出价格，实际使用时应根据需要设置
+    TThostFtdcVolumeType volume = volume_;  // 示例数量，实际使用时应根据需要设置
+    TThostFtdcPriceType buyPrice = 4660.1;  // 示例买入价格，实际使用时应根据需要设置
+    TThostFtdcPriceType sellPrice = 4661.1; // 示例卖出价格，实际使用时应根据需要设置
 
+    bool initFromLocalFile = true; // 是否根据本地文件初始化
     bool queryInstrumentSent = false;
-    bool queryPositionSent = true;
+    bool queryPositionSent = false;
     bool queryOrderSent = false;
     bool insertOpenOrderSent = false;
     bool insertCloseOrderSent = false;
@@ -66,7 +70,7 @@ void CTimerThread::Run()
 
         if (!queryInstrumentSent)
         {
-            int ret = spi_->ReqQryInstrument(emptyExchangeID, emptyInstrumentID);
+            int ret = spi_->ReqQryInstrument(exchangeID, instrumentID);
             if (ret != 0)
             {
                 LogError("Failed to send query instrument request, error code: {}", ret);
@@ -78,7 +82,7 @@ void CTimerThread::Run()
             queryInstrumentSent = true;
         }
 
-        if (!spi_->isInitialized())
+        if (!initFromLocalFile && !spi_->isInitialized())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待合约信息查询完成
             continue;

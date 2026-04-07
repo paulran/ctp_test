@@ -1,0 +1,37 @@
+{
+    "DCE": {
+        "a2605": {
+            "CombinationType": 48,
+            "CreateDate": "20250520",
+            "DeliveryMonth": 5,
+            "DeliveryYear": 2026,
+            "EndDelivDate": "20260522",
+            "ExchangeID": "DCE",
+            "ExchangeInstID": "a2605",
+            "ExpireDate": "20260519",
+            "InstLifePhase": 49,
+            "InstrumentID": "a2605",
+            "InstrumentName": "a2605",
+            "IsTrading": 1,
+            "LongMarginRatio": 0.18,
+            "MaxLimitOrderVolume": 1000,
+            "MaxMarginSideAlgorithm": 48,
+            "MaxMarketOrderVolume": 1000,
+            "MinLimitOrderVolume": 1,
+            "MinMarketOrderVolume": 1,
+            "OpenDate": "20250520",
+            "OptionsType": 0,
+            "PositionDateType": 50,
+            "PositionType": 50,
+            "PriceTick": 1.0,
+            "ProductClass": 49,
+            "ProductID": "a",
+            "ShortMarginRatio": 0.18,
+            "StartDelivDate": "20260519",
+            "StrikePrice": 1.7976931348623157e+308,
+            "UnderlyingInstrID": "a",
+            "UnderlyingMultiple": 1.0,
+            "VolumeMultiple": 10
+        }
+    }
+}

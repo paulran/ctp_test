@@ -40,4 +40,6 @@
 # debug information files
 *.dwo
 
+.vscode
+
 3rdparty/json

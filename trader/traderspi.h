@@ -527,7 +527,4 @@ private:
     std::unordered_map<string, TThostFtdcOrderStatusType> orderStatusMap_;
 
     CDataSaved dataSaved_;
-
-    // 所有的合约信息
-    std::unordered_map<string, std::unordered_map<string, CThostFtdcInstrumentField>> instrumentMap_; // ExchangeID -> InstrumentID -> InstrumentField
 };

@@ -7,7 +7,8 @@
 class CTimerThread
 {
 public:
-    CTimerThread(CThostFtdcTraderApi *tapi, CTraderSpi *spi);
+    CTimerThread(CThostFtdcTraderApi *tapi, CTraderSpi *spi, const string &exchangeID,
+                 const string &instrumentID, int volume);
     ~CTimerThread();
 
     void Start();
@@ -20,6 +21,9 @@ private:
 private:
     CThostFtdcTraderApi *tapi_ = nullptr;
     CTraderSpi *spi_ = nullptr;
+    string exchangeID_;
+    string instrumentID_;
+    int volume_;
 
     std::thread timerThread_;
     std::atomic<bool> running_{false};
