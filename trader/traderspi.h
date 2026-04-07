@@ -487,13 +487,18 @@ public:
 private:
     int ReqAuthenticate();
     int ReqUserLogin();
+    int ReqQrySettlementInfoConfirm();
+    int ReqQrySettlementInfo();
+    int ReqSettlementInfoConfirm();
 
 public:
     bool isLoggedIn() const;
+    bool isSettlementInfoConfirm() const;
     bool isInitialized() const;
     int ReqQryInstrument(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID);
-    int ReqQryInvestorPosition();
-    int ReqQryOrder();
+
+    int ReqQryInvestorPosition(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID);
+    int ReqQryOrder(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID);
     int ReqOrderInsert(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID,
                        TThostFtdcDirectionType direction, TThostFtdcPriceType price, TThostFtdcVolumeType volume,
                        TThostFtdcOffsetFlagType offsetFlag, TThostFtdcOrderRefType &orderRef);
@@ -521,6 +526,7 @@ private:
 
     // 原子变量，是否已经登录成功
     std::atomic<bool> loggedIn_ = false;
+    std::atomic<bool> settlementInfoConfirm_ = false;
     std::atomic<bool> isInitialized_ = false;
 
     // 所有的委托的状态

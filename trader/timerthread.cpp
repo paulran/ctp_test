@@ -62,7 +62,7 @@ void CTimerThread::Run()
     auto lastRunTime = std::chrono::steady_clock::now();
     while (running_)
     {
-        if (!spi_->isLoggedIn())
+        if (!spi_->isLoggedIn() || !spi_->isSettlementInfoConfirm())
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 等待登录成功
             continue;
@@ -95,7 +95,7 @@ void CTimerThread::Run()
             // 执行定时任务
             if (!queryPositionSent)
             {
-                int ret = spi_->ReqQryInvestorPosition();
+                int ret = spi_->ReqQryInvestorPosition(exchangeID, instrumentID);
                 if (ret != 0)
                 {
                     LogError("Failed to send query investor position request, error code: {}", ret);
@@ -139,7 +139,7 @@ void CTimerThread::Run()
                 // 先查询所有报单，找到之前插入的报单，然后发送撤单请求
                 if (!queryOrderSent)
                 {
-                    int ret = spi_->ReqQryOrder();
+                    int ret = spi_->ReqQryOrder(exchangeID, instrumentID);
                     if (ret != 0)
                     {
                         LogError("Failed to send query order request, error code: {}", ret);

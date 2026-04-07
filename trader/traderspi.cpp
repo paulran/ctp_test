@@ -77,6 +77,11 @@ void CTraderSpi::OnRspUserLogin(CThostFtdcRspUserLoginField *pRspUserLogin, CTho
     {
         LogInfo("Login successful. Trading day: {}, Login time: {}", pRspUserLogin->TradingDay, pRspUserLogin->LoginTime);
         loggedIn_.store(true, std::memory_order_release);
+        int ret = ReqQrySettlementInfoConfirm();
+        if (ret)
+        {
+            LogError("Failed to send qry settlement info confirm, error code: {}", ret);
+        }
     }
 }
 
@@ -203,11 +208,12 @@ void CTraderSpi::OnRspOrderAction(CThostFtdcInputOrderActionField *pInputOrderAc
 {
     if (pRspInfo && pRspInfo->ErrorID != 0)
     {
-        LogError("Order action failed, error code: {}, error message: {}", pRspInfo->ErrorID, pRspInfo->ErrorMsg);
+        LogError("Order action failed, error code: {}, error message: {}, order ref: {}", pRspInfo->ErrorID, pRspInfo->ErrorMsg,
+                 pInputOrderAction ? pInputOrderAction->OrderRef : "unknown");
     }
     else
     {
-        LogInfo("Order action request accepted, order ref: {}", pInputOrderAction->OrderRef);
+        LogInfo("Order action request accepted, order ref: {}", pInputOrderAction ? pInputOrderAction->OrderRef : "unknown");
     }
 }
 
@@ -233,8 +239,16 @@ void CTraderSpi::OnRspSettlementInfoConfirm(CThostFtdcSettlementInfoConfirmField
     }
     else
     {
-        LogInfo("Settlement info confirm successful, settlement id: {}, confirm date: {}, confirm time: {}",
-                pSettlementInfoConfirm->SettlementID, pSettlementInfoConfirm->ConfirmDate, pSettlementInfoConfirm->ConfirmTime);
+        if (pSettlementInfoConfirm)
+        {
+            LogInfo("Settlement info confirm successful, settlement id: {}, confirm date: {}, confirm time: {}",
+                    pSettlementInfoConfirm->SettlementID, pSettlementInfoConfirm->ConfirmDate, pSettlementInfoConfirm->ConfirmTime);
+        }
+        else
+        {
+            LogWarn("Settlement info confirm successful, settlement info confirm is null.");
+        }
+        settlementInfoConfirm_.store(true, std::memory_order_release);
     }
 }
 
@@ -394,8 +408,8 @@ void CTraderSpi::OnRspQryOrder(CThostFtdcOrderField *pOrder, CThostFtdcRspInfoFi
     }
     else
     {
-        LogInfo("Query order successful. Order ref: {}, OrderSysID: {}, instrument: {}, order status: {}",
-                pOrder->OrderRef, pOrder->OrderSysID, pOrder->InstrumentID, pOrder->OrderStatus);
+        LogInfo("Query order successful. Order ref: {}, OrderSysID: {}, instrument: {}, order status: {}, status msg: {}",
+                pOrder->OrderRef, pOrder->OrderSysID, pOrder->InstrumentID, pOrder->OrderStatus, pOrder->StatusMsg);
         // 保存订单状态到map中
         orderStatusMap_[pOrder->OrderRef] = pOrder->OrderStatus;
         if (bIsLast)
@@ -598,8 +612,24 @@ void CTraderSpi::OnRspQrySettlementInfo(CThostFtdcSettlementInfoField *pSettleme
     }
     else
     {
-        LogInfo("Query settlement info successful. Settlement ID: {}, trading day: {}",
-                pSettlementInfo->SettlementID, pSettlementInfo->TradingDay);
+        if (pSettlementInfo)
+        {
+            LogInfo("Query settlement info successful. Settlement ID: {}, trading day: {}, content: {}",
+                    pSettlementInfo->SettlementID, pSettlementInfo->TradingDay, pSettlementInfo->Content);
+        }
+        else
+        {
+            LogWarn("Query settlement info successful. Settlement info is null.");
+        }
+        int ret = ReqSettlementInfoConfirm();
+        if (ret)
+        {
+            LogError("Failed to send settlement info confirm, error code: {}", ret);
+        }
+        else
+        {
+            LogInfo("Sent settlement info confirm");
+        }
     }
 }
 
@@ -653,8 +683,46 @@ void CTraderSpi::OnRspQrySettlementInfoConfirm(CThostFtdcSettlementInfoConfirmFi
     }
     else
     {
-        LogInfo("Query settlement info confirm successful. Settlement ID: {}, confirm date: {}, confirm time: {}",
-                pSettlementInfoConfirm->SettlementID, pSettlementInfoConfirm->ConfirmDate, pSettlementInfoConfirm->ConfirmTime);
+        if (!pSettlementInfoConfirm)
+        {
+            LogWarn("Query settlement info confirm received with null settlement info confirm pointer.");
+            int ret = ReqQrySettlementInfo();
+            if (ret)
+            {
+                LogError("Failed to send qry settlement info, error code: {}", ret);
+            }
+            else
+            {
+                LogInfo("Sent qry settlement info");
+            }
+        }
+        else
+        {
+            LogInfo("Query settlement info confirm successful. Settlement ID: {}, confirm date: {}, confirm time: {}",
+                    pSettlementInfoConfirm->SettlementID, pSettlementInfoConfirm->ConfirmDate, pSettlementInfoConfirm->ConfirmTime);
+            // 已确认（ConfirmDate为当日）→ 可直接交易
+            std::time_t now_c = std::time(nullptr);
+            std::tm *now_tm = std::localtime(&now_c);
+            TThostFtdcDateType currentDate;
+            std::strftime(currentDate, sizeof(currentDate), "%Y%m%d", now_tm);
+            if (strncmp(pSettlementInfoConfirm->ConfirmDate, currentDate, sizeof(currentDate)))
+            {
+                // 已确认（ConfirmDate为当日）→ 可直接交易
+                settlementInfoConfirm_.store(true, std::memory_order_release);
+            }
+            else
+            {
+                int ret = ReqQrySettlementInfo();
+                if (ret)
+                {
+                    LogError("Failed to send qry settlement info, error code: {}", ret);
+                }
+                else
+                {
+                    LogInfo("Sent qry settlement info");
+                }
+            }
+        }
     }
 }
 
@@ -1592,9 +1660,45 @@ int CTraderSpi::ReqUserLogin()
     return api_->ReqUserLogin(&req, ++requestId_);
 }
 
+int CTraderSpi::ReqQrySettlementInfoConfirm()
+{
+    // 请求查询结算信息确认
+    CThostFtdcQrySettlementInfoConfirmField qrySettlementInfoConfirmField = {0};
+    strncpy(qrySettlementInfoConfirmField.BrokerID, brokerID_.c_str(), sizeof(qrySettlementInfoConfirmField.BrokerID) - 1);
+    strncpy(qrySettlementInfoConfirmField.InvestorID, investorID_.c_str(), sizeof(qrySettlementInfoConfirmField.InvestorID) - 1);
+    return api_->ReqQrySettlementInfoConfirm(&qrySettlementInfoConfirmField, ++requestId_);
+}
+
+int CTraderSpi::ReqQrySettlementInfo()
+{
+    // 请求查询投资者结算结果
+    CThostFtdcQrySettlementInfoField qrySettlementInfoField = {0};
+    strncpy(qrySettlementInfoField.BrokerID, brokerID_.c_str(), sizeof(qrySettlementInfoField.BrokerID) - 1);
+    strncpy(qrySettlementInfoField.InvestorID, investorID_.c_str(), sizeof(qrySettlementInfoField.InvestorID) - 1);
+    // TradingDay: 查询某一天的结算单，填写格式为“yyyymmdd”
+    std::time_t now_c = std::time(nullptr);
+    std::tm *now_tm = std::localtime(&now_c);
+    std::strftime(qrySettlementInfoField.TradingDay, sizeof(qrySettlementInfoField.TradingDay), "%Y%m%d", now_tm);
+    return api_->ReqQrySettlementInfo(&qrySettlementInfoField, ++requestId_);
+}
+
+int CTraderSpi::ReqSettlementInfoConfirm()
+{
+    // 投资者结算结果确认，在开始每日交易前都需要先确认上一日结算单，只需要确认一次。
+    CThostFtdcSettlementInfoConfirmField settlementInfoConfirmField = {0};
+    strncpy(settlementInfoConfirmField.BrokerID, brokerID_.c_str(), sizeof(settlementInfoConfirmField.BrokerID) - 1);
+    strncpy(settlementInfoConfirmField.InvestorID, investorID_.c_str(), sizeof(settlementInfoConfirmField.InvestorID) - 1);
+    return api_->ReqSettlementInfoConfirm(&settlementInfoConfirmField, ++requestId_);
+}
+
 bool CTraderSpi::isLoggedIn() const
 {
     return loggedIn_.load(std::memory_order_acquire);
+}
+
+bool CTraderSpi::isSettlementInfoConfirm() const
+{
+    return settlementInfoConfirm_.load(std::memory_order_acquire);
 }
 
 bool CTraderSpi::isInitialized() const
@@ -1610,21 +1714,23 @@ int CTraderSpi::ReqQryInstrument(TThostFtdcExchangeIDType exchangeID, TThostFtdc
     return api_->ReqQryInstrument(&qryInstrumentField, ++requestId_);
 }
 
-int CTraderSpi::ReqQryInvestorPosition()
+int CTraderSpi::ReqQryInvestorPosition(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID)
 {
-    // 结算单确认
-    // 请求查询结算单: ReqQrySettlementInfo
-    // 请求确认结算单及: ReqSettlementInfoConfirm
-    // 查询结算单确认的日期: ReqQrySettlementInfoConfirm
     // 查询持仓（汇总）: ReqQryInvestorPosition
     CThostFtdcQryInvestorPositionField qryInvestorPositionField = {0};
+    strncpy(qryInvestorPositionField.BrokerID, brokerID_.c_str(), sizeof(qryInvestorPositionField.BrokerID) - 1);
+    strncpy(qryInvestorPositionField.InvestorID, investorID_.c_str(), sizeof(qryInvestorPositionField.InvestorID) - 1);
+    memcpy(qryInvestorPositionField.ExchangeID, exchangeID, sizeof(qryInvestorPositionField.ExchangeID));
+    memcpy(qryInvestorPositionField.InstrumentID, instrumentID, sizeof(qryInvestorPositionField.InstrumentID));
     return api_->ReqQryInvestorPosition(&qryInvestorPositionField, ++requestId_);
 }
 
-int CTraderSpi::ReqQryOrder()
+int CTraderSpi::ReqQryOrder(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID)
 {
     // 请求查询报单
     CThostFtdcQryOrderField qryOrderField = {0};
+    memcpy(qryOrderField.ExchangeID, exchangeID, sizeof(qryOrderField.ExchangeID));
+    memcpy(qryOrderField.InstrumentID, instrumentID, sizeof(qryOrderField.InstrumentID));
     return api_->ReqQryOrder(&qryOrderField, ++requestId_);
 }
 
