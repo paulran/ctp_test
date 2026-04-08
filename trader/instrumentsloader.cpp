@@ -1,3 +1,4 @@
+#include "encodingconverter.h"
 #include "instrumentsloader.h"
 #include "logger.h"
 #include <fstream>
@@ -76,12 +77,6 @@ int CInstrumentsLoader::Load(const string &instrumentsFile)
 
 int CInstrumentsLoader::Save()
 {
-    std::ofstream outFile(instrumentsFile_, std::ios::out | std::ios::trunc);
-    if (!outFile.is_open())
-    {
-        LogError("Failed to open instruments file for writing: {}", instrumentsFile_);
-        return -1;
-    }
     Json instrumentsJson;
     for (const auto &exchangePair : instrumentsByExchange_)
     {
@@ -91,7 +86,7 @@ int CInstrumentsLoader::Save()
             instrumentsJson[exchangePair.first][instrumentPair.first] = Json::object();
             auto pInstrument = instrumentPair.second;
             instrumentsJson[exchangePair.first][instrumentPair.first]["ExchangeID"] = pInstrument->ExchangeID;
-            instrumentsJson[exchangePair.first][instrumentPair.first]["InstrumentName"] = pInstrument->InstrumentName;
+            instrumentsJson[exchangePair.first][instrumentPair.first]["InstrumentName"] = EncodingConverter::isGbk(pInstrument->InstrumentName) ? EncodingConverter::gbkToUtf8(pInstrument->InstrumentName) : pInstrument->InstrumentName;
             instrumentsJson[exchangePair.first][instrumentPair.first]["ProductClass"] = pInstrument->ProductClass;
             instrumentsJson[exchangePair.first][instrumentPair.first]["DeliveryYear"] = pInstrument->DeliveryYear;
             instrumentsJson[exchangePair.first][instrumentPair.first]["DeliveryMonth"] = pInstrument->DeliveryMonth;
@@ -123,6 +118,13 @@ int CInstrumentsLoader::Save()
             instrumentsJson[exchangePair.first][instrumentPair.first]["UnderlyingInstrID"] = pInstrument->UnderlyingInstrID;
         }
     }
+    std::ofstream outFile(instrumentsFile_);
+    if (!outFile.is_open())
+    {
+        LogError("Failed to open instruments file for writing: {}", instrumentsFile_);
+        return -1;
+    }
+    outFile.seekp(0);
     outFile << instrumentsJson.dump(4) << std::endl;
     outFile.close();
     LogInfo("Instruments saved to file: {}", instrumentsFile_);

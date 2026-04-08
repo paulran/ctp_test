@@ -449,6 +449,10 @@ void CTraderSpi::OnRspQryInvestorPosition(CThostFtdcInvestorPositionField *pInve
     {
         LogError("Query investor position failed, error code: {}, error message: {}", pRspInfo->ErrorID, pRspInfo->ErrorMsg);
     }
+    else if (!pInvestorPosition)
+    {
+        LogWarn("Query investor position successful, but investor position is null.");
+    }
     else
     {
         LogInfo("Query investor position successful. Instrument: {}, position: {}",

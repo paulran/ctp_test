@@ -99,12 +99,13 @@ void CTimerThread::Run()
                 if (ret != 0)
                 {
                     LogError("Failed to send query investor position request, error code: {}", ret);
+                    std::this_thread::sleep_for(std::chrono::microseconds(1000));
                 }
                 else
                 {
                     LogInfo("Sent query investor position request successfully.");
+                    queryPositionSent = true;
                 }
-                queryPositionSent = true;
             }
             else if (!insertOpenOrderSent)
             {
