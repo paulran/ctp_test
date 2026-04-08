@@ -50,6 +50,7 @@ void CTimerThread::Run()
 
     bool initFromLocalFile = true; // 是否根据本地文件初始化
     bool queryInstrumentSent = false;
+    bool queryTradingAccountSent = false;
     bool queryPositionSent = false;
     bool queryOrderSent = false;
     bool insertOpenOrderSent = false;
@@ -93,7 +94,21 @@ void CTimerThread::Run()
         if (elapsed >= intervalMs_)
         {
             // 执行定时任务
-            if (!queryPositionSent)
+            if (!queryTradingAccountSent)
+            {
+                int ret = spi_->ReqQryTradingAccount();
+                if (ret != 0)
+                {
+                    LogError("Failed to send query trading account request, error code: {}", ret);
+                    std::this_thread::sleep_for(std::chrono::microseconds(1000));
+                }
+                else
+                {
+                    LogInfo("Sent query trading account request successfully.");
+                    queryTradingAccountSent = true;
+                }
+            }
+            else if (!queryPositionSent)
             {
                 int ret = spi_->ReqQryInvestorPosition(exchangeID, instrumentID);
                 if (ret != 0)

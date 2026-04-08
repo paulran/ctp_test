@@ -497,6 +497,7 @@ public:
     bool isInitialized() const;
     int ReqQryInstrument(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID);
 
+    int ReqQryTradingAccount();
     int ReqQryInvestorPosition(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID);
     int ReqQryOrder(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID);
     int ReqOrderInsert(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID,

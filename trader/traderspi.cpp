@@ -467,6 +467,10 @@ void CTraderSpi::OnRspQryTradingAccount(CThostFtdcTradingAccountField *pTradingA
     {
         LogError("Query trading account failed, error code: {}, error message: {}", pRspInfo->ErrorID, pRspInfo->ErrorMsg);
     }
+    else if (!pTradingAccount)
+    {
+        LogWarn("Query trading account successful, but trading account is null.");
+    }
     else
     {
         LogInfo("Query trading account successful. Account ID: {}, balance: {}, available: {}",
@@ -1716,6 +1720,15 @@ int CTraderSpi::ReqQryInstrument(TThostFtdcExchangeIDType exchangeID, TThostFtdc
     memcpy(qryInstrumentField.ExchangeID, exchangeID, sizeof(qryInstrumentField.ExchangeID));
     memcpy(qryInstrumentField.InstrumentID, instrumentID, sizeof(qryInstrumentField.InstrumentID));
     return api_->ReqQryInstrument(&qryInstrumentField, ++requestId_);
+}
+
+int CTraderSpi::ReqQryTradingAccount()
+{
+    // 查询资金账户
+    CThostFtdcQryTradingAccountField qryTradingAccountField = {0};
+    strncpy(qryTradingAccountField.BrokerID, brokerID_.c_str(), sizeof(qryTradingAccountField.BrokerID) - 1);
+    strncpy(qryTradingAccountField.InvestorID, investorID_.c_str(), sizeof(qryTradingAccountField.InvestorID) - 1);
+    return api_->ReqQryTradingAccount(&qryTradingAccountField, ++requestId_);
 }
 
 int CTraderSpi::ReqQryInvestorPosition(TThostFtdcExchangeIDType exchangeID, TThostFtdcInstrumentIDType instrumentID)
