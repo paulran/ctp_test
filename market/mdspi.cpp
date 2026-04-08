@@ -4,7 +4,7 @@
 CMdSpi::CMdSpi(CThostFtdcMdApi *api, const string &brokerID, const string &userID, const string &password, const vector<string> &instrumentIDs)
     : api_(api), brokerID_(brokerID), userID_(userID), password_(password), instrumentIDs_(instrumentIDs)
 {
-    ppInstrumentID_.reserve(instrumentIDs_.size());
+    ppInstrumentID_.resize(instrumentIDs_.size());
     for (size_t i = 0; i < instrumentIDs_.size(); ++i)
     {
         ppInstrumentID_[i] = const_cast<char *>(instrumentIDs_[i].c_str());
@@ -64,6 +64,11 @@ void CMdSpi::OnRspUserLogin(CThostFtdcRspUserLoginField *pRspUserLogin, CThostFt
         LogInfo("Login successful. Trading day: {}, Login time: {}", pRspUserLogin->TradingDay, pRspUserLogin->LoginTime);
         loggedIn_.store(true, std::memory_order_release);
         // subscribe
+        LogInfo("Subscrbing market data of {} instruments.", ppInstrumentID_.size());
+        for (size_t i = 0; i < ppInstrumentID_.size(); ++i)
+        {
+            LogInfo("Subscrbing market data of {}", ppInstrumentID_.data()[i]);
+        }
         int ret = api_->SubscribeMarketData(ppInstrumentID_.data(), ppInstrumentID_.size());
         if (ret)
         {
