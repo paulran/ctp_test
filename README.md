@@ -9,7 +9,10 @@ make all
 
 ## 运行
 ```bash
-cd bin && ./trader --config ../config/simnow.json
+# 测试交易
+cd bin && ./trader --config ../config/trader.json
+# 测试行情
+cd bin && ./market --config ../config/market.json
 ```
 
 ## 参考

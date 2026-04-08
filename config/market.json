@@ -1,0 +1,13 @@
+{
+    "log": {
+        "level": "DEBUG"
+    },
+    "market": {
+        "frontAddress": "tcp://182.254.243.31:30011",
+        "brokerID": "9999",
+        "userID": "xxxxxx",
+        "password": "xxxxxx",
+        "instrumentIDs": ["a2605"],
+        "instrumentsFile": "../config/instruments.json"
+    }
+}

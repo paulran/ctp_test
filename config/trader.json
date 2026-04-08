@@ -3,7 +3,7 @@
         "level": "DEBUG"
     },
     "trader": {
-        "frontAddress": "tcp://182.254.243.31:40001",
+        "frontAddress": "tcp://182.254.243.31:30001",
         "brokerID": "9999",
         "userID": "xxxxxx",
         "userProductInfo": "simnow_client_test",

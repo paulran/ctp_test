@@ -9,11 +9,14 @@ libs:
 	make spdlog
 	make json
 
+market:
+	cd market && make
+
 trader:
 	cd trader && make
 
-all: libs trader
+all: libs market trader
 
 
-.PHONY: libs trader
+.PHONY: libs market trader
 
